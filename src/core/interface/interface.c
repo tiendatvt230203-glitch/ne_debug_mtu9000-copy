@@ -329,8 +329,40 @@ fail:
 void ne_pair_close(struct ne_pair *p, const struct app_config *cfg)
 {
     (void)cfg;
-    if (!p) return;
+    if (!p || !p->config)
+        return;
+
     core_xdp_detach(p);
+    interface_promisc(p, NE_DIR_LOCAL, 0);
+    interface_promisc(p, NE_DIR_WAN, 0);
+
+    for (int pass = 0; pass < 2; pass++) {
+        for (int dir = NE_DIR_LOCAL; dir <= NE_DIR_WAN; dir++) {
+            int count;
+            struct ne_xsk_queue *queues = pair_queues(p, dir, &count);
+
+            for (int i = 0; i < count; i++) {
+                if (!queues[i].xsk)
+                    continue;
+                int owner = p->umem &&
+                    xsk_socket__fd(queues[i].xsk) == xsk_umem__fd(p->umem);
+                if (owner != pass)
+                    continue;
+                xsk_socket__delete(queues[i].xsk);
+                memset(&queues[i], 0, sizeof(queues[i]));
+            }
+        }
+    }
+
+    if (p->umem)
+        xsk_umem__delete(p->umem);
+    if (p->bufs)
+        munmap(p->bufs, p->bufsize);
+    if (p->pool.buf) {
+        pthread_spin_destroy(&p->pool.lock);
+        free(p->pool.buf);
+    }
+    memset(p, 0, sizeof(*p));
 }
 
 int ne_fill_slot(struct ne_pair *p, enum ne_packet_dir dir, int rx_slot)

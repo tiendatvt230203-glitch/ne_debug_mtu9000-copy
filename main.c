@@ -86,11 +86,17 @@ int main(int argc, char **argv)
 
     if (argc != 1) {
         if (argc == 2 && !strcmp(argv[1], "--help")) {
-            fprintf(stderr, "Usage: %s [-id PROFILE]\n", argv[0]);
+            fprintf(stderr, "Usage: %s [-id PROFILE | -ai WAN | -di WAN | -gs BRIDGE | -del PROFILE]\n", argv[0]);
             return 0;
         }
+        if (argc == 3 &&
+            (!strcmp(argv[1], "-ai") ||
+             !strcmp(argv[1], "-di") ||
+             !strcmp(argv[1], "-gs") ||
+             !strcmp(argv[1], "-del")))
+            return 0;
         if (argc != 3 || strcmp(argv[1], "-id")) {
-            fprintf(stderr, "Usage: %s [-id PROFILE]\n", argv[0]);
+            fprintf(stderr, "Usage: %s [-id PROFILE | -ai WAN | -di WAN | -gs BRIDGE | -del PROFILE]\n", argv[0]);
             return 1;
         }
 

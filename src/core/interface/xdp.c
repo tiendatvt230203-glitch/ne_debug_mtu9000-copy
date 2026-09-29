@@ -4,8 +4,10 @@
 #include <linux/if_link.h>
 #include <errno.h>
 
-extern int bpf_program__set_flags(struct bpf_program *, __u32)
-    __attribute__((weak));
+extern struct bpf_program *bpf_object__next_program(
+    const struct bpf_object *obj, struct bpf_program *prog);
+extern int bpf_program__set_flags(struct bpf_program *prog, __u32 flags);
+extern int bpf_xdp_query_id(int ifindex, int flags, __u32 *prog_id);
 
 int core_xdp_attach(struct ne_pair *p)
 {
@@ -21,8 +23,8 @@ int core_xdp_attach(struct ne_pair *p)
         if (rc) { core_xdp_detach(p); return rc; }
         if (wan) p->bpf_wans[0] = obj;
         else p->bpf_locals[0] = obj;
-        struct bpf_program *prog = bpf_program__next(NULL, obj);
-        if (!prog || !bpf_program__set_flags) {
+        struct bpf_program *prog = bpf_object__next_program(obj, NULL);
+        if (!prog) {
             core_xdp_detach(p);
             return -EOPNOTSUPP;
         }
@@ -39,8 +41,8 @@ int core_xdp_attach(struct ne_pair *p)
             }
         }
         int ifindex = if_nametoindex(name);
-        rc = bpf_set_link_xdp_fd(ifindex, bpf_program__fd(prog),
-                                XDP_FLAGS_DRV_MODE | XDP_FLAGS_UPDATE_IF_NOEXIST);
+        rc = bpf_xdp_attach(ifindex, bpf_program__fd(prog),
+                       XDP_FLAGS_DRV_MODE | XDP_FLAGS_UPDATE_IF_NOEXIST, NULL);
         if (rc) { core_xdp_detach(p); return rc; }
         if (wan) { cfg->wans[0].ifindex = ifindex; p->xdp_wan_on[0] = 1; }
         else { cfg->locals[0].ifindex = ifindex; p->xdp_local_on[0] = 1; }
@@ -53,13 +55,31 @@ void core_xdp_detach(struct ne_pair *p)
     if (!p || !p->config)
         return;
 
-    bpf_set_link_xdp_fd(
-        p->config->locals[0].ifindex,
-        -1,
-        XDP_FLAGS_DRV_MODE);
+    for (int wan = 0; wan < 2; wan++) {
+        struct bpf_object *obj = wan ? p->bpf_wans[0] : p->bpf_locals[0];
+        if (!obj)
+            continue;
+        int attached = wan ? p->xdp_wan_on[0] : p->xdp_local_on[0];
+        int ifindex = wan ? p->config->wans[0].ifindex
+                          : p->config->locals[0].ifindex;
+        struct bpf_prog_info info = {0};
+        __u32 size = sizeof(info);
+        __u32 current = 0;
+        struct bpf_program *prog = bpf_object__next_program(obj, NULL);
 
-    bpf_set_link_xdp_fd(
-        p->config->wans[0].ifindex,
-        -1,
-        XDP_FLAGS_DRV_MODE);
+        if (attached && prog &&
+            !bpf_obj_get_info_by_fd(bpf_program__fd(prog), &info, &size) &&
+            !bpf_xdp_query_id(ifindex, XDP_FLAGS_DRV_MODE, &current) &&
+            current == info.id)
+            bpf_xdp_detach(ifindex, XDP_FLAGS_DRV_MODE, NULL);
+
+        bpf_object__close(obj);
+        if (wan) {
+            p->bpf_wans[0] = NULL;
+            p->xdp_wan_on[0] = 0;
+        } else {
+            p->bpf_locals[0] = NULL;
+            p->xdp_local_on[0] = 0;
+        }
+    }
 }
